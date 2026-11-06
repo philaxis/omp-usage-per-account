@@ -1,6 +1,6 @@
 // @ts-nocheck
-// One compact line above the editor with plan usage for one account at a time:
-//    Claude me@example.com  5h 4% 1h2m  1w 2% 6d1h  1/4
+// One compact line above the editor with plan usage for one account at a time, in fixed columns:
+//    Claude me@example.com     │ 5h   4% 1h2m  │ 1w   2% 6d1h  │ 1/4
 // Alt+U (or /usage-next) steps to the next account: every subscription account omp reports usage for
 // (Claude, ChatGPT/Codex, ...) plus the DeepSeek balance when a DeepSeek key is configured.
 // The account the current model is using has an inverted accent label and is listed first.
@@ -11,6 +11,10 @@ const MIN_FETCH_GAP_MS = 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEEPSEEK_LOW_BALANCE = 1;
+const PCT_WIDTH = 4; // "100%"
+const RESET_WIDTH = 5; // "6d23h", "4h59m"
+// Both window cells plus the separator between them; the DeepSeek balance fills the same span.
+const BODY_WIDTH = 2 * (2 + 1 + PCT_WIDTH + 1 + RESET_WIDTH) + 3;
 
 const PROVIDER_NAME = { anthropic: "Claude", "openai-codex": "ChatGPT", deepseek: "DeepSeek" };
 const CURRENCY_SYMBOL = { USD: "$", CNY: "¥" };
@@ -121,40 +125,46 @@ function collectEntries(ctx, reports, deepseek) {
 	return entries.sort((a, b) => Number(b.active) - Number(a.active));
 }
 
+// Fixed-width cell ("5h  98% 2d12h") so the columns stay put while rotating.
 function windowCell(theme, name, win, now) {
-	if (!win) return `${name} ${paint(theme, "dim", "-")}`;
-	const pct = paint(theme, levelColor(win.used), `${Math.round(win.used * 100)}%`);
-	const reset =
-		typeof win.resetsAt === "number" && win.resetsAt > now
-			? ` ${paint(theme, "dim", shortDuration(win.resetsAt - now))}`
-			: "";
-	return `${name} ${pct}${reset}`;
+	if (!win) return `${name} ${paint(theme, "dim", "   -".padEnd(PCT_WIDTH + 1 + RESET_WIDTH))}`;
+	const pct = paint(theme, levelColor(win.used), `${Math.round(win.used * 100)}%`.padStart(PCT_WIDTH));
+	const resetText =
+		typeof win.resetsAt === "number" && win.resetsAt > now ? shortDuration(win.resetsAt - now) : "";
+	return `${name} ${pct} ${paint(theme, "dim", resetText.padEnd(RESET_WIDTH))}`;
 }
 
 function balanceCell(theme, balance) {
-	if (!balance.available) return paint(theme, "error", "unavailable");
+	if (!balance.available) return paint(theme, "error", "unavailable".padEnd(BODY_WIDTH));
 	const parts = balance.infos.map((info) => {
 		const amount = Number(info.total_balance);
 		const symbol = CURRENCY_SYMBOL[info.currency] ?? `${info.currency} `;
 		const text = `${symbol}${Number.isFinite(amount) ? amount.toFixed(2) : info.total_balance} left`;
 		const color = !Number.isFinite(amount) || amount <= 0 ? "error" : amount < DEEPSEEK_LOW_BALANCE ? "warning" : "success";
-		return paint(theme, color, text);
+		return { text, color };
 	});
-	return parts.length > 0 ? parts.join("  ") : paint(theme, "dim", "-");
+	if (parts.length === 0) return paint(theme, "dim", "-".padEnd(BODY_WIDTH));
+	const pad = " ".repeat(Math.max(0, BODY_WIDTH - parts.map((p) => p.text).join("  ").length));
+	return parts.map((p) => paint(theme, p.color, p.text)).join("  ") + pad;
 }
 
-function renderLine(ctx, entry, index, total) {
+function entryLabel(entry) {
+	const name = PROVIDER_NAME[entry.provider] ?? entry.provider;
+	return entry.kind === "plan" ? `${name} ${entry.account}` : name;
+}
+
+function renderLine(ctx, entry, index, total, labelWidth) {
 	const theme = ctx.ui?.theme;
 	const now = Date.now();
-	const name = PROVIDER_NAME[entry.provider] ?? entry.provider;
-	const text = ` ${entry.kind === "plan" ? `${name} ${entry.account}` : name} `;
+	const text = ` ${entryLabel(entry).padEnd(labelWidth)} `;
 	const label = entry.active ? `\x1b[7m${paint(theme, "accent", text)}\x1b[27m` : paint(theme, "muted", text);
+	const sep = paint(theme, "dim", " │ ");
 	const body =
 		entry.kind === "plan"
-			? `${windowCell(theme, "5h", entry.wins["5h"], now)}  ${windowCell(theme, "1w", entry.wins["7d"], now)}`
+			? `${windowCell(theme, "5h", entry.wins["5h"], now)}${sep}${windowCell(theme, "1w", entry.wins["7d"], now)}`
 			: balanceCell(theme, entry.balance);
-	const nav = total > 1 ? paint(theme, "dim", `  ${index + 1}/${total}`) : "";
-	return `${label} ${body}${nav}`;
+	const nav = total > 1 ? `${sep}${paint(theme, "dim", `${index + 1}/${total}`)}` : "";
+	return `${label}${sep}${body}${nav}`;
 }
 
 async function fetchDeepseekBalance(ctx, signal) {
@@ -205,7 +215,9 @@ export default function (pi) {
 		);
 		index = (index + step) % entries.length;
 		selectedKey = entries[index].key;
-		ctx.ui.setWidget(WIDGET_KEY, [renderLine(ctx, entries[index], index, entries.length)], {
+		// One label width for every entry, so 5h / 1w start at the same column on each account.
+		const labelWidth = Math.max(...entries.map((e) => entryLabel(e).length));
+		ctx.ui.setWidget(WIDGET_KEY, [renderLine(ctx, entries[index], index, entries.length, labelWidth)], {
 			placement: "aboveEditor",
 		});
 	};
