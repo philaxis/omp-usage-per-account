@@ -1,24 +1,23 @@
 // @ts-nocheck
-// Plan usage per account instead of one pooled number.
-//   expanded (default): widget above the editor, one block per account with email, 5h and weekly limits
-//   folded:             one compact line in the `status` status-line segment
-// Toggle with Alt+U or /usage-fold; the choice persists in ~/.omp/agent/usage-per-account.json.
-
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+// One compact line above the editor with plan usage for one account at a time, in fixed columns:
+//    Claude me@example.com     │ 5h   4% 1h2m  │ 1w   2% 6d1h  │ 1/4
+// Alt+U (or /usage-next) steps to the next account: every subscription account omp reports usage for
+// (Claude, ChatGPT/Codex, ...) plus the DeepSeek balance when a DeepSeek key is configured.
+// Each provider's account in use has an inverted accent label; the current model's provider is listed first.
 
 const WIDGET_KEY = "usage-accounts";
-const STATUS_KEY = "usage-accounts";
-const STATE_FILE = path.join(os.homedir(), ".omp", "agent", "usage-per-account.json");
 const REFRESH_MS = 5 * 60_000;
 const MIN_FETCH_GAP_MS = 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
-const BAR_CELLS = 10;
-const FOLDED_LABEL_LEN = 8;
-const FOLDED_SHOW_RESET_AT = 0.8;
+const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
+const DEEPSEEK_LOW_BALANCE = 1;
+const PCT_WIDTH = 4; // "100%"
+const RESET_WIDTH = 5; // "6d23h", "4h59m"
+// Both window cells plus the separator between them; the DeepSeek balance fills the same span.
+const BODY_WIDTH = 2 * (2 + 1 + PCT_WIDTH + 1 + RESET_WIDTH) + 3;
 
-const PROVIDER_NAME = { anthropic: "Claude", "openai-codex": "Codex" };
+const PROVIDER_NAME = { anthropic: "Claude", "openai-codex": "ChatGPT", deepseek: "DeepSeek" };
+const CURRENCY_SYMBOL = { USD: "$", CNY: "¥" };
 
 function windowClass(limit) {
 	const id = limit.scope?.windowId ?? limit.window?.id;
@@ -42,20 +41,12 @@ function mainWindows(report) {
 	return out;
 }
 
-function koreanDuration(ms) {
-	const minutes = Math.max(1, Math.round(ms / 60_000));
-	if (minutes < 60) return `${minutes}분`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return minutes % 60 ? `${hours}시간 ${minutes % 60}분` : `${hours}시간`;
-	return hours % 24 ? `${Math.floor(hours / 24)}일 ${hours % 24}시간` : `${Math.floor(hours / 24)}일`;
-}
-
 function shortDuration(ms) {
-	const minutes = Math.max(0, Math.round(ms / 60_000));
+	const minutes = Math.max(1, Math.round(ms / 60_000));
 	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.floor(hours / 24)}d${hours % 24}h`;
+	if (hours < 24) return minutes % 60 ? `${hours}h${minutes % 60}m` : `${hours}h`;
+	return hours % 24 ? `${Math.floor(hours / 24)}d${hours % 24}h` : `${Math.floor(hours / 24)}d`;
 }
 
 function levelColor(used) {
@@ -73,11 +64,6 @@ function paint(theme, color, text) {
 	}
 }
 
-function accountEmail(report) {
-	const m = report.metadata ?? {};
-	return m.email ?? m.accountId ?? "account";
-}
-
 function activeIdentity(ctx, provider) {
 	try {
 		const sessionId = ctx.sessionManager?.getSessionId?.();
@@ -87,7 +73,7 @@ function activeIdentity(ctx, provider) {
 	}
 }
 
-function isActive(report, identity) {
+function sameAccount(report, identity) {
 	if (!identity) return false;
 	const m = report.metadata ?? {};
 	return [
@@ -99,8 +85,10 @@ function isActive(report, identity) {
 	});
 }
 
-// Providers to show: every multi-account provider, plus the current model's provider.
-function collectGroups(ctx, reports) {
+// Rotation entries. Every provider marks the account omp uses for it (its only account, or the
+// account this session is pinned to); the current model's provider comes first.
+function collectEntries(ctx, reports, deepseek) {
+	const currentProvider = ctx.model?.provider;
 	const byProvider = new Map();
 	for (const report of reports) {
 		if (!report?.provider || !Array.isArray(report.limits)) continue;
@@ -108,116 +96,134 @@ function collectGroups(ctx, reports) {
 		list.push(report);
 		byProvider.set(report.provider, list);
 	}
-	const groups = [];
+	const entries = [];
 	for (const [provider, list] of byProvider) {
-		const multi = list.length > 1;
-		if (!multi && provider !== ctx.model?.provider) continue;
-		const identity = multi ? activeIdentity(ctx, provider) : undefined;
-		const accounts = list
-			.map((report) => ({ report, wins: mainWindows(report), active: multi && isActive(report, identity) }))
-			.filter((a) => a.wins["5h"] || a.wins["7d"]);
-		if (accounts.length > 0) groups.push({ provider, multi, accounts });
+		const identity = list.length > 1 ? activeIdentity(ctx, provider) : undefined;
+		// No session pin for this provider yet: omp starts from its first account.
+		const pinned = list.some((report) => sameAccount(report, identity));
+		list.forEach((report, i) => {
+			const wins = mainWindows(report);
+			if (!wins["5h"] && !wins["7d"]) return;
+			const m = report.metadata ?? {};
+			const account = m.email ?? m.accountId ?? "account";
+			entries.push({
+				key: `${provider}\u0000${account}`,
+				kind: "plan",
+				provider,
+				account,
+				wins,
+				active: list.length === 1 || (pinned ? sameAccount(report, identity) : i === 0),
+			});
+		});
 	}
-	return groups;
+	if (deepseek) {
+		entries.push({
+			key: "deepseek\u0000balance",
+			kind: "balance",
+			provider: "deepseek",
+			balance: deepseek,
+			active: deepseek.available,
+		});
+	}
+	const rank = (e) => (e.provider === currentProvider ? 0 : 2) + (e.active ? 0 : 1);
+	return entries.sort((a, b) => rank(a) - rank(b));
 }
 
-function windowRow(theme, name, win, now) {
-	if (!win) return `    ${name}  ${paint(theme, "dim", "정보 없음")}`;
-	const filled = Math.min(BAR_CELLS, Math.round(win.used * BAR_CELLS));
-	const color = levelColor(win.used);
-	const bar = paint(theme, color, "█".repeat(filled)) + paint(theme, "dim", "░".repeat(BAR_CELLS - filled));
-	const pct = paint(theme, color, `${String(Math.round(win.used * 100)).padStart(3)}%`);
-	const reset =
-		typeof win.resetsAt === "number" && win.resetsAt > now
-			? paint(theme, "muted", `  ${koreanDuration(win.resetsAt - now)} 후 초기화`)
-			: "";
-	return `    ${name}  ${bar} ${pct}${reset}`;
+// Fixed-width cell ("5h  98% 2d12h") so the columns stay put while rotating.
+function windowCell(theme, name, win, now) {
+	if (!win) return `${name} ${paint(theme, "dim", "   -".padEnd(PCT_WIDTH + 1 + RESET_WIDTH))}`;
+	const pct = paint(theme, levelColor(win.used), `${Math.round(win.used * 100)}%`.padStart(PCT_WIDTH));
+	const resetText =
+		typeof win.resetsAt === "number" && win.resetsAt > now ? shortDuration(win.resetsAt - now) : "";
+	return `${name} ${pct} ${paint(theme, "dim", resetText.padEnd(RESET_WIDTH))}`;
 }
 
-function renderExpanded(ctx, groups) {
-	const theme = ctx.ui?.theme;
-	const now = Date.now();
-	const lines = [];
-	groups.forEach((group, index) => {
-		const name = PROVIDER_NAME[group.provider] ?? group.provider;
-		const hint = index === 0 ? paint(theme, "dim", "  · Alt+U 접기") : "";
-		if (group.multi) {
-			lines.push(`${paint(theme, "accent", `${name} 사용량`)}${hint}`);
-		}
-		for (const { report, wins, active } of group.accounts) {
-			const email = accountEmail(report);
-			const head = group.multi
-				? `${active ? paint(theme, "accent", "▸ ") : "  "}${active ? paint(theme, "accent", email) : email}${active ? paint(theme, "dim", "  (사용 중)") : ""}`
-				: `${paint(theme, "accent", `${name} 사용량`)}  ${email}${hint}`;
-			lines.push(head);
-			lines.push(windowRow(theme, "5시간", wins["5h"], now));
-			lines.push(windowRow(theme, "1주일", wins["7d"], now));
-		}
+function balanceCell(theme, balance) {
+	if (!balance.available) return paint(theme, "error", "unavailable".padEnd(BODY_WIDTH));
+	const parts = balance.infos.map((info) => {
+		const amount = Number(info.total_balance);
+		const symbol = CURRENCY_SYMBOL[info.currency] ?? `${info.currency} `;
+		const text = `${symbol}${Number.isFinite(amount) ? amount.toFixed(2) : info.total_balance} left`;
+		const color = !Number.isFinite(amount) || amount <= 0 ? "error" : amount < DEEPSEEK_LOW_BALANCE ? "warning" : "success";
+		return { text, color };
 	});
-	return lines;
+	if (parts.length === 0) return paint(theme, "dim", "-".padEnd(BODY_WIDTH));
+	const pad = " ".repeat(Math.max(0, BODY_WIDTH - parts.map((p) => p.text).join("  ").length));
+	return parts.map((p) => paint(theme, p.color, p.text)).join("  ") + pad;
 }
 
-function renderFolded(ctx, groups) {
+function entryLabel(entry) {
+	const name = PROVIDER_NAME[entry.provider] ?? entry.provider;
+	return entry.kind === "plan" ? `${name} ${entry.account}` : name;
+}
+
+function renderLine(ctx, entry, index, total, labelWidth) {
 	const theme = ctx.ui?.theme;
 	const now = Date.now();
-	const cell = (name, win) => {
-		if (!win) return undefined;
-		let text = `${name} ${Math.round(win.used * 100)}%`;
-		if (win.used >= FOLDED_SHOW_RESET_AT && typeof win.resetsAt === "number" && win.resetsAt > now) {
-			text += ` ${shortDuration(win.resetsAt - now)}`;
-		}
-		return win.used >= 0.5 ? paint(theme, levelColor(win.used), text) : text;
+	const text = ` ${entryLabel(entry).padEnd(labelWidth)} `;
+	const label = entry.active ? `\x1b[7m${paint(theme, "accent", text)}\x1b[27m` : paint(theme, "muted", text);
+	const sep = paint(theme, "dim", " │ ");
+	const body =
+		entry.kind === "plan"
+			? `${windowCell(theme, "5h", entry.wins["5h"], now)}${sep}${windowCell(theme, "1w", entry.wins["7d"], now)}`
+			: balanceCell(theme, entry.balance);
+	const nav = total > 1 ? `${sep}${paint(theme, "dim", `${index + 1}/${total}`)}` : "";
+	return `${label}${sep}${body}${nav}`;
+}
+
+async function fetchDeepseekBalance(ctx, signal) {
+	const registry = ctx.modelRegistry;
+	const apiKey = await registry?.getApiKeyForProvider?.("deepseek", ctx.sessionManager?.getSessionId?.());
+	if (!apiKey) return undefined;
+	const baseUrl = String(registry.getProviderBaseUrl?.("deepseek") ?? DEEPSEEK_DEFAULT_BASE_URL)
+		.replace(/\/+$/, "")
+		.replace(/\/v1$/, "");
+	const response = await fetch(`${baseUrl}/user/balance`, {
+		headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+		signal,
+	});
+	if (!response.ok) return undefined;
+	const body = await response.json();
+	return {
+		available: body?.is_available !== false,
+		infos: Array.isArray(body?.balance_infos) ? body.balance_infos : [],
 	};
-	const text = groups
-		.map((group) =>
-			group.accounts
-				.map(({ report, wins, active }) => {
-					const label = group.multi
-						? String(accountEmail(report)).split("@")[0].slice(0, FOLDED_LABEL_LEN)
-						: (PROVIDER_NAME[group.provider] ?? group.provider).toLowerCase();
-					const cells = [cell("5h", wins["5h"]), cell("7d", wins["7d"])].filter(Boolean).join("·");
-					return `${active ? "▸" : ""}${label} ${cells}`;
-				})
-				.join(" │ "),
-		)
-		.join(" ║ ");
-	return text || undefined;
-}
-
-function loadFolded() {
-	try {
-		return JSON.parse(fs.readFileSync(STATE_FILE, "utf8")).folded === true;
-	} catch {
-		return false;
-	}
-}
-
-function saveFolded(folded) {
-	try {
-		fs.writeFileSync(STATE_FILE, `${JSON.stringify({ folded })}\n`);
-	} catch {
-		// the toggle still applies to this session
-	}
 }
 
 export default function (pi) {
 	let reports = [];
+	let deepseek;
 	let lastFetch = 0;
 	let inFlight = false;
 	let timer;
-	let folded = loadFolded();
+	let selectedKey;
+	let lastActiveKey;
 
 	const isRoot = (ctx) => ctx?.hasUI && ctx.mode === "tui" && ctx.agent?.kind !== "sub";
 
-	const paintUsage = (ctx) => {
-		const groups = collectGroups(ctx, reports);
-		if (folded || groups.length === 0) {
+	const paintUsage = (ctx, step = 0) => {
+		const entries = collectEntries(ctx, reports, deepseek);
+		if (entries.length === 0) {
 			ctx.ui.setWidget(WIDGET_KEY, undefined);
-			ctx.ui.setStatus(STATUS_KEY, renderFolded(ctx, groups));
-		} else {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-			ctx.ui.setWidget(WIDGET_KEY, renderExpanded(ctx, groups), { placement: "aboveEditor" });
+			return;
 		}
+		// Follow the account in use whenever it changes; otherwise keep the user's pick.
+		const activeKey = entries.find((e) => e.active)?.key;
+		if (activeKey !== lastActiveKey) {
+			lastActiveKey = activeKey;
+			selectedKey = activeKey;
+		}
+		let index = Math.max(
+			0,
+			entries.findIndex((e) => e.key === selectedKey),
+		);
+		index = (index + step) % entries.length;
+		selectedKey = entries[index].key;
+		// One label width for every entry, so 5h / 1w start at the same column on each account.
+		const labelWidth = Math.max(...entries.map((e) => entryLabel(e).length));
+		ctx.ui.setWidget(WIDGET_KEY, [renderLine(ctx, entries[index], index, entries.length, labelWidth)], {
+			placement: "aboveEditor",
+		});
 	};
 
 	const refresh = async (ctx) => {
@@ -225,39 +231,38 @@ export default function (pi) {
 			paintUsage(ctx);
 			return;
 		}
-		const usage = ctx.modelRegistry?.authStorage?.usage;
-		if (typeof usage?.reports !== "function") return;
 		inFlight = true;
 		lastFetch = Date.now();
-		try {
-			const result = await usage.reports({
-				baseUrlResolver: (provider) => ctx.modelRegistry.getProviderBaseUrl?.(provider),
-				signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-			});
-			if (Array.isArray(result)) reports = result;
-		} catch {
-			// keep the last good snapshot
-		} finally {
-			inFlight = false;
-		}
+		const signal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+		const usage = ctx.modelRegistry?.authStorage?.usage;
+		const [planResult, deepseekResult] = await Promise.allSettled([
+			typeof usage?.reports === "function"
+				? usage.reports({
+						baseUrlResolver: (provider) => ctx.modelRegistry.getProviderBaseUrl?.(provider),
+						signal,
+					})
+				: undefined,
+			fetchDeepseekBalance(ctx, signal),
+		]);
+		// Keep the last good snapshot on failure.
+		if (planResult.status === "fulfilled" && Array.isArray(planResult.value)) reports = planResult.value;
+		if (deepseekResult.status === "fulfilled" && deepseekResult.value) deepseek = deepseekResult.value;
+		inFlight = false;
 		paintUsage(ctx);
 	};
 
-	const toggle = (ctx) => {
-		if (!isRoot(ctx)) return;
-		folded = !folded;
-		saveFolded(folded);
-		paintUsage(ctx);
+	const next = (ctx) => {
+		if (isRoot(ctx)) paintUsage(ctx, 1);
 	};
 
 	pi.registerShortcut("alt+u", {
-		description: "Fold/unfold per-account usage",
-		handler: toggle,
+		description: "Show the next account's usage",
+		handler: next,
 	});
 
-	pi.registerCommand("usage-fold", {
-		description: "Fold/unfold per-account usage (same as Alt+U)",
-		handler: async (_args, ctx) => toggle(ctx),
+	pi.registerCommand("usage-next", {
+		description: "Show the next account's usage (same as Alt+U)",
+		handler: async (_args, ctx) => next(ctx),
 	});
 
 	pi.on("session_start", (_event, ctx) => {

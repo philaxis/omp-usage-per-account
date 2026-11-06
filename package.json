@@ -1,7 +1,7 @@
 {
   "name": "omp-usage-per-account",
-  "version": "0.1.0",
-  "description": "oh-my-pi (omp) extension: show plan usage per account (email, 5h and weekly limits) instead of one pooled number",
+  "version": "0.2.0",
+  "description": "oh-my-pi (omp) extension: one-line plan usage per account (Claude, ChatGPT, DeepSeek balance), Alt+U to rotate",
   "type": "module",
   "license": "MIT",
   "repository": {

@@ -1,52 +1,44 @@
 # omp-usage-per-account
 
-[oh-my-pi (omp)](https://github.com/can1357/oh-my-pi)에서 Claude 같은 구독 요금제 사용량을 **계정별로** 보여주는 확장입니다.
+An [oh-my-pi (omp)](https://github.com/can1357/oh-my-pi) extension that shows subscription usage and API balance **per account**, one compact line at a time.
 
-omp의 기본 표시는 지금 쓰는 계정 하나만 보여주고, `omp usage`의 `capacity` 줄은 요금제 크기가 달라도 계정마다 사용률을 그냥 더합니다. 이 확장은 계정마다 이메일, 5시간 한도, 1주일 한도를 따로 보여줍니다.
+omp's built-in footer shows only the account in use, and the `capacity` line of `omp usage` simply adds up each account's used fraction even when the plans differ in size. This extension puts one account on a single line above the editor; `Alt+U` steps to the next one.
 
 ```
-Claude 사용량  · Alt+U 접기
-▸ me@example.com  (사용 중)
-    5시간  ░░░░░░░░░░   4%  3분 후 초기화
-    1주일  ░░░░░░░░░░   2%  6일 2시간 후 초기화
-  other@example.com
-    5시간  ░░░░░░░░░░   0%
-    1주일  ██████████  98%  2일 13시간 후 초기화
+ Claude me@example.com        │ 5h   4% 4h56m │ 1w   2% 6d1h  │ 1/4   <- in use: inverted accent label
+ Claude other@example.com     │ 5h   0%       │ 1w  98% 2d12h │ 2/4
+ ChatGPT me@school.ac.kr      │ 5h   0% 4h58m │ 1w   0% 6d18h │ 3/4   <- in use (only account)
+ DeepSeek                     │ $5.35 left                    │ 4/4   <- in use (API key)
 ```
 
-## 동작
+Every account is padded to the same label width, so `5h`, `1w` and the counter stay in the same columns while rotating.
 
-- **펼친 상태(기본):** 입력창 위에 계정별 블록을 표시합니다. `▸`는 지금 세션이 쓰는 계정입니다.
-- **접은 상태:** 상태줄에 한 줄로 줄입니다. 예: `▸me 5h 4%·7d 2% │ other 5h 0%·7d 98% 2d13h`
-- **접기/펼치기:** `Alt+U` 또는 `/usage-fold`. 선택은 `~/.omp/agent/usage-per-account.json`에 저장되어 다음 실행에도 유지됩니다.
-- **표시 대상:** 계정이 2개 이상인 제공자는 항상 표시하고, 계정이 1개인 제공자(예: Codex)는 현재 모델이 그 제공자일 때만 표시합니다.
-- **색:** 50% 이상 경고 색, 80% 이상 빨간색.
-- **갱신:** 세션 시작 시, 5분마다, 작업이 끝날 때마다(최소 1분 간격). omp의 사용량 캐시를 그대로 씁니다.
-- 모델별 별도 한도(예: `7 Day (Fable)`)는 표시하지 않습니다.
+## Behavior
 
-## 설치
+- **Accounts:** every subscription account omp reports usage for (Claude, ChatGPT/Codex, ...), plus the DeepSeek balance when a DeepSeek key is configured.
+- **Account in use:** for every provider, the account omp uses is drawn with an inverted accent label: its only account, the account the session is pinned to, or the first account when nothing is pinned yet. Other accounts are standby (muted). The current model's provider comes first, and the line jumps back to it when the session moves to another account or a fallback model.
+- **Next account:** `Alt+U` or `/usage-next`.
+- **Limits:** `5h` and `1w` used percentage, then the time until that window resets. Yellow from 50%, red from 80%. Per-model meters such as `7 Day (Fable)` are not shown.
+- **DeepSeek:** balance from `/user/balance`. Yellow below $1, red at zero or when unavailable.
+- **Refresh:** at session start, every 5 minutes, and after each agent run (at most once a minute). Subscription usage comes from omp's own usage cache.
+
+## Install
 
 ```sh
 omp plugin install github:philaxis/omp-usage-per-account
 ```
 
-접은 상태의 한 줄 표시는 상태줄의 `status` 칸에 나옵니다. 상태줄에 `status`를 넣고, 같은 글자가 상태줄 아래에 한 번 더 나오지 않게 `showHookStatus`를 끕니다. 기본 `usage` 칸은 지금 계정 하나만 보여주므로 `status`로 바꾸는 것을 권장합니다.
+Restart omp after installing or updating (`omp -c` reopens the last conversation).
 
-```yaml
-# ~/.omp/agent/config.yml
-statusLine:
-  preset: custom
-  leftSegments: [model, context_pct, status, time_spent, pr]
-  showHookStatus: false
-```
+## Update / remove
 
-## 업데이트 / 제거
+`omp plugin upgrade` may not pick up new commits on a Git branch. Reinstall with an explicit commit instead:
 
 ```sh
-omp plugin upgrade omp-usage-per-account
+omp plugin install github:philaxis/omp-usage-per-account#<commit>
 omp plugin uninstall omp-usage-per-account
 ```
 
-## 라이선스
+## License
 
 MIT
