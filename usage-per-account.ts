@@ -1,6 +1,6 @@
 // @ts-nocheck
 // One line above the editor with plan usage for one account at a time.
-//   Claude 사용량  ● 사용 중  me@example.com   5시간 █░░░░  4% 1분 후   1주일 ░░░░░  2% 6일 2시간 후   1/4 Alt+U
+//   Claude 사용량  ● 사용 중  me@example.com   5시간 4% (1분)   1주일 2% (6일 2시간)  1/4 Alt+U
 // Alt+U (or /usage-next) steps to the next account: every subscription account omp reports usage for
 // (Claude, ChatGPT/Codex, ...) plus the DeepSeek balance when a DeepSeek key is configured.
 // The account the current model is using is drawn in the accent colour and listed first.
@@ -9,7 +9,6 @@ const WIDGET_KEY = "usage-accounts";
 const REFRESH_MS = 5 * 60_000;
 const MIN_FETCH_GAP_MS = 60_000;
 const FETCH_TIMEOUT_MS = 15_000;
-const BAR_CELLS = 5;
 const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEEPSEEK_LOW_BALANCE = 1;
 
@@ -124,15 +123,12 @@ function collectEntries(ctx, reports, deepseek) {
 
 function windowCell(theme, name, win, now) {
 	if (!win) return `${name} ${paint(theme, "dim", "정보 없음")}`;
-	const filled = Math.min(BAR_CELLS, Math.round(win.used * BAR_CELLS));
-	const color = levelColor(win.used);
-	const bar = paint(theme, color, "█".repeat(filled)) + paint(theme, "dim", "░".repeat(BAR_CELLS - filled));
-	const pct = paint(theme, color, `${String(Math.round(win.used * 100)).padStart(3)}%`);
+	const pct = paint(theme, levelColor(win.used), `${Math.round(win.used * 100)}%`);
 	const reset =
 		typeof win.resetsAt === "number" && win.resetsAt > now
-			? paint(theme, "muted", ` ${koreanDuration(win.resetsAt - now)} 후`)
+			? paint(theme, "muted", ` (${koreanDuration(win.resetsAt - now)})`)
 			: "";
-	return `${name} ${bar} ${pct}${reset}`;
+	return `${name} ${pct}${reset}`;
 }
 
 function balanceCell(theme, balance) {
@@ -156,7 +152,7 @@ function renderLine(ctx, entry, index, total) {
 		entry.kind === "plan"
 			? `${windowCell(theme, "5시간", entry.wins["5h"], Date.now())}   ${windowCell(theme, "1주일", entry.wins["7d"], Date.now())}`
 			: balanceCell(theme, entry.balance);
-	const nav = total > 1 ? paint(theme, "dim", `   ${index + 1}/${total} Alt+U`) : "";
+	const nav = total > 1 ? paint(theme, "dim", `  ${index + 1}/${total} Alt+U`) : "";
 	return `${paint(theme, entry.active ? "accent" : undefined, name)}  ${badge}${who}   ${body}${nav}`;
 }
 
