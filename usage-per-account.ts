@@ -1,9 +1,9 @@
 // @ts-nocheck
-// One line above the editor with plan usage for one account at a time.
-//   Claude 사용량  ● 사용 중  me@example.com   5시간 4% (1분)   1주일 2% (6일 2시간)  1/4 Alt+U
+// One compact line above the editor with plan usage for one account at a time:
+//    Claude me@example.com  5h 4% 1h2m  1w 2% 6d1h  1/4
 // Alt+U (or /usage-next) steps to the next account: every subscription account omp reports usage for
 // (Claude, ChatGPT/Codex, ...) plus the DeepSeek balance when a DeepSeek key is configured.
-// The account the current model is using is drawn in the accent colour and listed first.
+// The account the current model is using has an inverted accent label and is listed first.
 
 const WIDGET_KEY = "usage-accounts";
 const REFRESH_MS = 5 * 60_000;
@@ -37,12 +37,12 @@ function mainWindows(report) {
 	return out;
 }
 
-function koreanDuration(ms) {
+function shortDuration(ms) {
 	const minutes = Math.max(1, Math.round(ms / 60_000));
-	if (minutes < 60) return `${minutes}분`;
+	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return minutes % 60 ? `${hours}시간 ${minutes % 60}분` : `${hours}시간`;
-	return hours % 24 ? `${Math.floor(hours / 24)}일 ${hours % 24}시간` : `${Math.floor(hours / 24)}일`;
+	if (hours < 24) return minutes % 60 ? `${hours}h${minutes % 60}m` : `${hours}h`;
+	return hours % 24 ? `${Math.floor(hours / 24)}d${hours % 24}h` : `${Math.floor(hours / 24)}d`;
 }
 
 function levelColor(used) {
@@ -122,38 +122,40 @@ function collectEntries(ctx, reports, deepseek) {
 }
 
 function windowCell(theme, name, win, now) {
-	if (!win) return `${name} ${paint(theme, "dim", "정보 없음")}`;
+	if (!win) return `${name} ${paint(theme, "dim", "-")}`;
 	const pct = paint(theme, levelColor(win.used), `${Math.round(win.used * 100)}%`);
 	const reset =
 		typeof win.resetsAt === "number" && win.resetsAt > now
-			? paint(theme, "muted", ` (${koreanDuration(win.resetsAt - now)})`)
+			? ` ${paint(theme, "dim", shortDuration(win.resetsAt - now))}`
 			: "";
 	return `${name} ${pct}${reset}`;
 }
 
 function balanceCell(theme, balance) {
-	if (!balance.available) return paint(theme, "error", "사용 불가 (잔액 부족)");
+	if (!balance.available) return paint(theme, "error", "unavailable");
 	const parts = balance.infos.map((info) => {
 		const amount = Number(info.total_balance);
 		const symbol = CURRENCY_SYMBOL[info.currency] ?? `${info.currency} `;
-		const text = `잔액 ${symbol}${Number.isFinite(amount) ? amount.toFixed(2) : info.total_balance}`;
+		const text = `${symbol}${Number.isFinite(amount) ? amount.toFixed(2) : info.total_balance} left`;
 		const color = !Number.isFinite(amount) || amount <= 0 ? "error" : amount < DEEPSEEK_LOW_BALANCE ? "warning" : "success";
 		return paint(theme, color, text);
 	});
-	return parts.length > 0 ? parts.join("  ") : paint(theme, "dim", "정보 없음");
+	return parts.length > 0 ? parts.join("  ") : paint(theme, "dim", "-");
 }
 
 function renderLine(ctx, entry, index, total) {
 	const theme = ctx.ui?.theme;
-	const name = `${PROVIDER_NAME[entry.provider] ?? entry.provider} 사용량`;
-	const badge = entry.active ? paint(theme, "accent", "● 사용 중") : paint(theme, "dim", "○ 대기");
-	const who = entry.kind === "plan" ? `  ${entry.active ? paint(theme, "accent", entry.account) : entry.account}` : "";
+	const now = Date.now();
+	const name = PROVIDER_NAME[entry.provider] ?? entry.provider;
+	const text = ` ${entry.kind === "plan" ? `${name} ${entry.account}` : name} `;
+	let label = paint(theme, entry.active ? "accent" : "muted", text);
+	if (entry.active && typeof theme?.inverse === "function") label = theme.inverse(label);
 	const body =
 		entry.kind === "plan"
-			? `${windowCell(theme, "5시간", entry.wins["5h"], Date.now())}   ${windowCell(theme, "1주일", entry.wins["7d"], Date.now())}`
+			? `${windowCell(theme, "5h", entry.wins["5h"], now)}  ${windowCell(theme, "1w", entry.wins["7d"], now)}`
 			: balanceCell(theme, entry.balance);
-	const nav = total > 1 ? paint(theme, "dim", `  ${index + 1}/${total} Alt+U`) : "";
-	return `${paint(theme, entry.active ? "accent" : undefined, name)}  ${badge}${who}   ${body}${nav}`;
+	const nav = total > 1 ? paint(theme, "dim", `  ${index + 1}/${total}`) : "";
+	return `${label} ${body}${nav}`;
 }
 
 async function fetchDeepseekBalance(ctx, signal) {
