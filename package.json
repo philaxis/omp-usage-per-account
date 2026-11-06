@@ -1,0 +1,16 @@
+{
+  "name": "omp-usage-per-account",
+  "version": "0.1.0",
+  "description": "oh-my-pi (omp) extension: show plan usage per account (email, 5h and weekly limits) instead of one pooled number",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/philaxis/omp-usage-per-account.git"
+  },
+  "keywords": ["omp", "oh-my-pi", "omp-plugin", "claude", "usage"],
+  "files": ["usage-per-account.ts", "README.md", "LICENSE"],
+  "omp": {
+    "extensions": ["./usage-per-account.ts"]
+  }
+}
