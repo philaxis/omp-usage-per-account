@@ -148,8 +148,7 @@ function renderLine(ctx, entry, index, total) {
 	const now = Date.now();
 	const name = PROVIDER_NAME[entry.provider] ?? entry.provider;
 	const text = ` ${entry.kind === "plan" ? `${name} ${entry.account}` : name} `;
-	let label = paint(theme, entry.active ? "accent" : "muted", text);
-	if (entry.active && typeof theme?.inverse === "function") label = theme.inverse(label);
+	const label = entry.active ? `\x1b[7m${paint(theme, "accent", text)}\x1b[27m` : paint(theme, "muted", text);
 	const body =
 		entry.kind === "plan"
 			? `${windowCell(theme, "5h", entry.wins["5h"], now)}  ${windowCell(theme, "1w", entry.wins["7d"], now)}`
