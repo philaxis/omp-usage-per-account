@@ -7,8 +7,8 @@ omp's built-in footer shows only the account in use, and the `capacity` line of 
 ```
  Claude me@example.com        │ 5h   4% 4h56m │ 1w   2% 6d1h  │ 1/4   <- in use: inverted accent label
  Claude other@example.com     │ 5h   0%       │ 1w  98% 2d12h │ 2/4
- ChatGPT me@school.ac.kr      │ 5h   0% 4h58m │ 1w   0% 6d18h │ 3/4
- DeepSeek                     │ $5.35 left                    │ 4/4
+ ChatGPT me@school.ac.kr      │ 5h   0% 4h58m │ 1w   0% 6d18h │ 3/4   <- in use (only account)
+ DeepSeek                     │ $5.35 left                    │ 4/4   <- in use (API key)
 ```
 
 Every account is padded to the same label width, so `5h`, `1w` and the counter stay in the same columns while rotating.
@@ -16,7 +16,7 @@ Every account is padded to the same label width, so `5h`, `1w` and the counter s
 ## Behavior
 
 - **Accounts:** every subscription account omp reports usage for (Claude, ChatGPT/Codex, ...), plus the DeepSeek balance when a DeepSeek key is configured.
-- **Account in use:** its label is drawn inverted in the accent colour and it comes first. When the session moves to another account or a fallback model, the line follows it.
+- **Account in use:** for every provider, the account omp uses is drawn with an inverted accent label: its only account, the account the session is pinned to, or the first account when nothing is pinned yet. Other accounts are standby (muted). The current model's provider comes first, and the line jumps back to it when the session moves to another account or a fallback model.
 - **Next account:** `Alt+U` or `/usage-next`.
 - **Limits:** `5h` and `1w` used percentage, then the time until that window resets. Yellow from 50%, red from 80%. Per-model meters such as `7 Day (Fable)` are not shown.
 - **DeepSeek:** balance from `/user/balance`. Yellow below $1, red at zero or when unavailable.

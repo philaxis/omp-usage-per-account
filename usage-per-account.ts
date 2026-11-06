@@ -3,7 +3,7 @@
 //    Claude me@example.com     │ 5h   4% 1h2m  │ 1w   2% 6d1h  │ 1/4
 // Alt+U (or /usage-next) steps to the next account: every subscription account omp reports usage for
 // (Claude, ChatGPT/Codex, ...) plus the DeepSeek balance when a DeepSeek key is configured.
-// The account the current model is using has an inverted accent label and is listed first.
+// Each provider's account in use has an inverted accent label; the current model's provider is listed first.
 
 const WIDGET_KEY = "usage-accounts";
 const REFRESH_MS = 5 * 60_000;
@@ -85,7 +85,8 @@ function sameAccount(report, identity) {
 	});
 }
 
-// Rotation entries, the account in use first.
+// Rotation entries. Every provider marks the account omp uses for it (its only account, or the
+// account this session is pinned to); the current model's provider comes first.
 function collectEntries(ctx, reports, deepseek) {
 	const currentProvider = ctx.model?.provider;
 	const byProvider = new Map();
@@ -97,10 +98,12 @@ function collectEntries(ctx, reports, deepseek) {
 	}
 	const entries = [];
 	for (const [provider, list] of byProvider) {
-		const identity = provider === currentProvider && list.length > 1 ? activeIdentity(ctx, provider) : undefined;
-		for (const report of list) {
+		const identity = list.length > 1 ? activeIdentity(ctx, provider) : undefined;
+		// No session pin for this provider yet: omp starts from its first account.
+		const pinned = list.some((report) => sameAccount(report, identity));
+		list.forEach((report, i) => {
 			const wins = mainWindows(report);
-			if (!wins["5h"] && !wins["7d"]) continue;
+			if (!wins["5h"] && !wins["7d"]) return;
 			const m = report.metadata ?? {};
 			const account = m.email ?? m.accountId ?? "account";
 			entries.push({
@@ -109,9 +112,9 @@ function collectEntries(ctx, reports, deepseek) {
 				provider,
 				account,
 				wins,
-				active: provider === currentProvider && (list.length === 1 || sameAccount(report, identity)),
+				active: list.length === 1 || (pinned ? sameAccount(report, identity) : i === 0),
 			});
-		}
+		});
 	}
 	if (deepseek) {
 		entries.push({
@@ -119,10 +122,11 @@ function collectEntries(ctx, reports, deepseek) {
 			kind: "balance",
 			provider: "deepseek",
 			balance: deepseek,
-			active: currentProvider === "deepseek",
+			active: deepseek.available,
 		});
 	}
-	return entries.sort((a, b) => Number(b.active) - Number(a.active));
+	const rank = (e) => (e.provider === currentProvider ? 0 : 2) + (e.active ? 0 : 1);
+	return entries.sort((a, b) => rank(a) - rank(b));
 }
 
 // Fixed-width cell ("5h  98% 2d12h") so the columns stay put while rotating.
