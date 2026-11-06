@@ -5,11 +5,13 @@ An [oh-my-pi (omp)](https://github.com/can1357/oh-my-pi) extension that shows su
 omp's built-in footer shows only the account in use, and the `capacity` line of `omp usage` simply adds up each account's used fraction even when the plans differ in size. This extension puts one account on a single line above the editor; `Alt+U` steps to the next one.
 
 ```
- Claude me@example.com  5h 4% 4h56m  1w 2% 6d1h  1/4      <- in use: inverted accent label
- Claude other@example.com  5h 0%  1w 98% 2d12h  2/4
- ChatGPT me@school.ac.kr  5h 0% 4h58m  1w 0% 6d18h  3/4
- DeepSeek  $5.35 left  4/4
+ Claude me@example.com        │ 5h   4% 4h56m │ 1w   2% 6d1h  │ 1/4   <- in use: inverted accent label
+ Claude other@example.com     │ 5h   0%       │ 1w  98% 2d12h │ 2/4
+ ChatGPT me@school.ac.kr      │ 5h   0% 4h58m │ 1w   0% 6d18h │ 3/4
+ DeepSeek                     │ $5.35 left                    │ 4/4
 ```
+
+Every account is padded to the same label width, so `5h`, `1w` and the counter stay in the same columns while rotating.
 
 ## Behavior
 
